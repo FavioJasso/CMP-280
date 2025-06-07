@@ -10,6 +10,6 @@ Professor : Dawn Rywalt
 Instituion : County College of Morris 
 
 Team Members : 
-<li>Favio Jasso
-Vinay Sam
-Kishan P</li>
+<li>Favio Jasso</li>
+<li>Vinay Sam</li>
+<li>Kishan P</li>
