@@ -1,4 +1,4 @@
-# Software Engineer
+# Software Engineering
 
 ## Description of CMP - 280: 
 
