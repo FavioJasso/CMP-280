@@ -1,0 +1,608 @@
+// Main Application Flow
+
+FUNCTION StartApplication()
+    InitializeDatabase()
+    InitializeUserInterface()
+    IF UserIsNotLoggedIn THEN
+        DisplayLoginScreen()
+    ELSE
+        LoadUserProfile(CurrentUserID)
+        DisplayDashboard()
+    END IF
+    StartEventLoop() // Listen for user interactions
+END FUNCTION
+
+// --- User Management ---
+
+CLASS User
+    ATTRIBUTES: username, email, password, userId (auto-generated)
+
+    METHOD Login(username, password) -> Boolean
+        IF Authenticate(username, password) THEN
+            SetCurrentUser(username)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD Logout()
+        ClearCurrentUser()
+        DisplayLoginScreen()
+    END METHOD
+
+    METHOD Register(username, email, password) -> Boolean
+        IF ValidateUserData(username, email, password) AND IsUsernameAvailable(username) THEN
+            CreateNewUserInDatabase(username, email, password)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD UpdateProfile(userId, newEmail, newPassword) -> Boolean
+        IF IsCurrentUser(userId) THEN
+            UpdateUserInDatabase(userId, newEmail, newPassword)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+END CLASS
+
+// --- Bank and Account Management ---
+
+CLASS Bank
+    ATTRIBUTES: bankId, bankName
+
+    METHOD AddBank(userId, bankName) -> BankId
+        IF IsAuthenticatedUser(userId) THEN
+            CreateBankEntry(bankName)
+            RETURN NewBankId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD RemoveBank(userId, bankId) -> Boolean
+        IF IsAuthenticatedUser(userId) AND UserOwnsBank(userId, bankId) THEN
+            DeleteBankEntry(bankId)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD GetBankDetails(bankId) -> BankObject
+        RETURN RetrieveBankFromDatabase(bankId)
+    END METHOD
+END CLASS
+
+CLASS BankAccount
+    ATTRIBUTES: accountNumber, accountType, balance, bankId, userId
+
+    METHOD AddAccount(userId, bankId, accountNumber, accountType, initialBalance) -> AccountId
+        IF IsAuthenticatedUser(userId) AND UserOwnsBank(userId, bankId) THEN
+            CreateAccountEntry(bankId, accountNumber, accountType, initialBalance)
+            RETURN NewAccountId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD RemoveAccount(userId, accountId) -> Boolean
+        IF IsAuthenticatedUser(userId) AND UserOwnsAccount(userId, accountId) THEN
+            DeleteAccountEntry(accountId)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD UpdateBalance(accountId, amountChange) -> Boolean
+        IF AccountExists(accountId) THEN
+            currentBalance = GetAccountBalance(accountId)
+            newBalance = currentBalance + amountChange
+            UpdateAccountBalanceInDatabase(accountId, newBalance)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD GetAccountDetails(accountId) -> BankAccountObject
+        RETURN RetrieveAccountFromDatabase(accountId)
+    END METHOD
+END CLASS
+
+// --- Transaction Management ---
+
+CLASS Transaction
+    ATTRIBUTES: transactionId, date, amount, description, accountId
+
+    METHOD AddTransaction(accountId, date, amount, description) -> TransactionId
+        IF AccountExists(accountId) THEN
+            CreateTransactionEntry(accountId, date, amount, description)
+            UpdateAccountBalance(accountId, amount) // Update balance based on transaction
+            SendNotification(accountId, "New transaction recorded.")
+            RETURN NewTransactionId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD EditTransaction(transactionId, newDate, newAmount, newDescription) -> Boolean
+        IF TransactionExists(transactionId) THEN
+            oldAmount = GetTransactionAmount(transactionId)
+            UpdateTransactionEntry(transactionId, newDate, newAmount, newDescription)
+            UpdateAccountBalance(GetAccountIdForTransaction(transactionId), newAmount - oldAmount)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD DeleteTransaction(transactionId) -> Boolean
+        IF TransactionExists(transactionId) THEN
+            amount = GetTransactionAmount(transactionId)
+            accountId = GetAccountIdForTransaction(transactionId)
+            DeleteTransactionEntry(transactionId)
+            UpdateAccountBalance(accountId, -amount) // Revert balance change
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD GetTransactions(accountId, startDate, endDate) -> List<TransactionObject>
+        RETURN RetrieveTransactionsByAccountAndDate(accountId, startDate, endDate)
+    END METHOD
+END CLASS
+
+// --- Notifications ---
+
+CLASS Notification
+    ATTRIBUTES: notificationId, content, sentDate, userId, accountId (optional)
+
+    METHOD SendNotification(userId, content, relatedAccountId = NULL)
+        CreateNotificationEntry(userId, content, CurrentDate, relatedAccountId)
+        DisplayNotificationToUser(userId, content)
+    END METHOD
+
+    METHOD MarkAsRead(notificationId) -> Boolean
+        IF NotificationExists(notificationId) THEN
+            UpdateNotificationStatus(notificationId, "read")
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+END CLASS
+
+// --- Reminders ---
+
+CLASS Reminder
+    ATTRIBUTES: reminderId, reminderDate, message, userId
+
+    METHOD AddReminder(userId, date, message) -> ReminderId
+        IF IsAuthenticatedUser(userId) THEN
+            CreateReminderEntry(userId, date, message)
+            ScheduleNotificationForReminder(date, message)
+            RETURN NewReminderId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD EditReminder(reminderId, newDate, newMessage) -> Boolean
+        IF ReminderExists(reminderId) AND UserOwnsReminder(CurrentUserID, reminderId) THEN
+            UpdateReminderEntry(reminderId, newDate, newMessage)
+            RescheduleNotificationForReminder(reminderId, newDate, newMessage)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD DeleteReminder(reminderId) -> Boolean
+        IF ReminderExists(reminderId) AND UserOwnsReminder(CurrentUserID, reminderId) THEN
+            DeleteReminderEntry(reminderId)
+            CancelScheduledNotification(reminderId)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD GetReminders(userId, startDate, endDate) -> List<ReminderObject>
+        RETURN RetrieveRemindersByUserAndDate(userId, startDate, endDate)
+    END METHOD
+END CLASS
+
+// --- Savings Plan ---
+
+CLASS SavingsPlan
+    ATTRIBUTES: planId, goalAmount, targetDate, userId, currentAmount (derived)
+
+    METHOD CreatePlan(userId, goalAmount, targetDate) -> PlanId
+        IF IsAuthenticatedUser(userId) THEN
+            CreateSavingsPlanEntry(userId, goalAmount, targetDate, initialAmount = 0)
+            RETURN NewPlanId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD UpdatePlan(planId, newGoalAmount, newTargetDate) -> Boolean
+        IF SavingsPlanExists(planId) AND UserOwnsPlan(CurrentUserID, planId) THEN
+            UpdateSavingsPlanEntry(planId, newGoalAmount, newTargetDate)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD DeletePlan(planId) -> Boolean
+        IF SavingsPlanExists(planId) AND UserOwnsPlan(CurrentUserID, planId) THEN
+            DeleteSavingsPlanEntry(planId)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD CheckProgress(planId) -> Double
+        IF SavingsPlanExists(planId) THEN
+            totalDeposits = SumTransactionsForSavingsPlan(planId)
+            RETURN totalDeposits / GetGoalAmount(planId) * 100
+        ELSE
+            RETURN 0
+        END IF
+    END METHOD
+END CLASS
+
+// --- Receipt Management ---
+
+CLASS Receipt
+    ATTRIBUTES: receiptId, image (URL/path), date, totalAmount, userId
+
+    METHOD AddReceipt(userId, imagePath, date, totalAmount) -> ReceiptId
+        IF IsAuthenticatedUser(userId) THEN
+            UploadImageToStorage(imagePath) -> imageUrl
+            CreateReceiptEntry(userId, imageUrl, date, totalAmount)
+            RETURN NewReceiptId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD ViewReceipt(receiptId) -> ImageURL
+        IF ReceiptExists(receiptId) AND UserOwnsReceipt(CurrentUserID, receiptId) THEN
+            RETURN GetReceiptImageURL(receiptId)
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD DeleteReceipt(receiptId) -> Boolean
+        IF ReceiptExists(receiptId) AND UserOwnsReceipt(CurrentUserID, receiptId) THEN
+            DeleteReceiptEntry(receiptId)
+            DeleteImageFromStorage(GetReceiptImageURL(receiptId))
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+END CLASS
+
+// --- Subscription Management ---
+
+CLASS Subscription
+    ATTRIBUTES: subscriptionId, serviceName, monthlyCost, userId, nextBillingDate
+
+    METHOD AddSubscription(userId, serviceName, monthlyCost, nextBillingDate) -> SubscriptionId
+        IF IsAuthenticatedUser(userId) THEN
+            CreateSubscriptionEntry(userId, serviceName, monthlyCost, nextBillingDate)
+            ScheduleCalendarEvent(userId, nextBillingDate, "Subscription Due", NewSubscriptionId, editable=TRUE)
+            RETURN NewSubscriptionId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD EditSubscription(subscriptionId, newServiceName, newMonthlyCost, newNextBillingDate) -> Boolean
+        IF SubscriptionExists(subscriptionId) AND UserOwnsSubscription(CurrentUserID, subscriptionId) THEN
+            UpdateSubscriptionEntry(subscriptionId, newServiceName, newMonthlyCost, newNextBillingDate)
+            UpdateCalendarEvent(subscriptionId, newNextBillingDate)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD CancelSubscription(subscriptionId) -> Boolean
+        IF SubscriptionExists(subscriptionId) AND UserOwnsSubscription(CurrentUserID, subscriptionId) THEN
+            DeleteSubscriptionEntry(subscriptionId)
+            DeleteCalendarEvent(subscriptionId)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD GetSubscriptionDetails(subscriptionId) -> SubscriptionObject
+        RETURN RetrieveSubscriptionFromDatabase(subscriptionId)
+    END METHOD
+END CLASS
+
+// --- Report Analysis ---
+
+CLASS ReportAnalysis
+    ATTRIBUTES: reportId, analysisDate, insights, userId
+
+    METHOD GenerateReport(userId, periodStartDate, periodEndDate) -> ReportId
+        IF IsAuthenticatedUser(userId) THEN
+            transactions = GetTransactionsForUser(userId, periodStartDate, periodEndDate)
+            spendingByCategory = AnalyzeSpending(transactions)
+            incomeVsExpenses = CalculateIncomeVsExpenses(transactions)
+            insights = GenerateInsights(spendingByCategory, incomeVsExpenses)
+            CreateReportEntry(userId, CurrentDate, insights)
+            RETURN NewReportId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD ViewReport(reportId) -> ReportObject
+        IF ReportExists(reportId) AND UserOwnsReport(CurrentUserID, reportId) THEN
+            RETURN RetrieveReportFromDatabase(reportId)
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD ExportReport(reportId, format) -> File
+        IF ReportExists(reportId) AND UserOwnsReport(CurrentUserID, reportId) THEN
+            reportData = RetrieveReportFromDatabase(reportId)
+            RETURN ConvertReportToFormat(reportData, format)
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+END CLASS
+
+// --- Spending Tracker ---
+
+CLASS SpendingTracker
+    ATTRIBUTES: trackerId, budgetLimit, totalSpent, userId
+
+    METHOD SetBudget(userId, budgetAmount) -> TrackerId
+        IF IsAuthenticatedUser(userId) THEN
+            IF TrackerExistsForUser(userId) THEN
+                UpdateBudgetLimit(userId, budgetAmount)
+                RETURN ExistingTrackerId
+            ELSE
+                CreateSpendingTrackerEntry(userId, budgetAmount, initialSpent = 0)
+                RETURN NewTrackerId
+            END IF
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD TrackSpending(userId, amount) -> Boolean
+        IF TrackerExistsForUser(userId) THEN
+            currentSpent = GetTotalSpent(userId)
+            newSpent = currentSpent + amount
+            UpdateTotalSpent(userId, newSpent)
+            IF newSpent > GetBudgetLimit(userId) THEN
+                SendNotification(userId, "You have exceeded your budget!")
+            END IF
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD GetSpendingSummary(userId) -> SpendingSummaryObject
+        IF TrackerExistsForUser(userId) THEN
+            budget = GetBudgetLimit(userId)
+            spent = GetTotalSpent(userId)
+            remaining = budget - spent
+            RETURN {Budget: budget, Spent: spent, Remaining: remaining}
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+END CLASS
+
+// --- Calendar Events ---
+
+CLASS CalendarEvent
+    ATTRIBUTES: eventId, eventDate, eventType, entityId (e.g., subscriptionId, reminderId), editable
+
+    METHOD AddEvent(userId, date, type, entityId, editable) -> EventId
+        IF IsAuthenticatedUser(userId) THEN
+            CreateCalendarEventEntry(userId, date, type, entityId, editable)
+            RETURN NewEventId
+        ELSE
+            RETURN NULL
+        END IF
+    END METHOD
+
+    METHOD EditEvent(eventId, newDate, newType, newEntityId, newEditable) -> Boolean
+        IF CalendarEventExists(eventId) AND UserOwnsEvent(CurrentUserID, eventId) AND IsEventEditable(eventId) THEN
+            UpdateCalendarEventEntry(eventId, newDate, newType, newEntityId, newEditable)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD DeleteEvent(eventId) -> Boolean
+        IF CalendarEventExists(eventId) AND UserOwnsEvent(CurrentUserID, eventId) THEN
+            DeleteCalendarEventEntry(eventId)
+            RETURN TRUE
+        ELSE
+            RETURN FALSE
+        END IF
+    END METHOD
+
+    METHOD GetEvents(userId, startDate, endDate) -> List<CalendarEventObject>
+        RETURN RetrieveCalendarEventsByUserAndDate(userId, startDate, endDate)
+    END METHOD
+END CLASS
+
+// --- Helper Functions (Conceptual) ---
+
+FUNCTION Authenticate(username, password) -> Boolean
+    // Logic to verify user credentials against database
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION ValidateUserData(username, email, password) -> Boolean
+    // Logic to validate format and strength of user data
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION IsUsernameAvailable(username) -> Boolean
+    // Logic to check if username is already taken
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION CreateNewUserInDatabase(username, email, password)
+    // Logic to save new user to database
+END FUNCTION
+
+FUNCTION SetCurrentUser(username)
+    // Logic to set the currently logged-in user session
+END FUNCTION
+
+FUNCTION ClearCurrentUser()
+    // Logic to clear the current user session
+END FUNCTION
+
+FUNCTION IsAuthenticatedUser(userId) -> Boolean
+    // Checks if the provided userId matches the current authenticated user
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsBank(userId, bankId) -> Boolean
+    // Checks if the given user owns the specified bank
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsAccount(userId, accountId) -> Boolean
+    // Checks if the given user owns the specified account
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION AccountExists(accountId) -> Boolean
+    // Checks if an account with the given ID exists
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION TransactionExists(transactionId) -> Boolean
+    // Checks if a transaction with the given ID exists
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsReminder(userId, reminderId) -> Boolean
+    // Checks if the given user owns the specified reminder
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION SavingsPlanExists(planId) -> Boolean
+    // Checks if a savings plan with the given ID exists
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsPlan(userId, planId) -> Boolean
+    // Checks if the given user owns the specified savings plan
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UploadImageToStorage(imagePath) -> ImageURL
+    // Logic to upload image to cloud storage and return URL
+    RETURN "http://example.com/image.jpg"
+END FUNCTION
+
+FUNCTION DeleteImageFromStorage(imageUrl) -> Boolean
+    // Logic to delete image from cloud storage
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsReceipt(userId, receiptId) -> Boolean
+    // Checks if the given user owns the specified receipt
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsSubscription(userId, subscriptionId) -> Boolean
+    // Checks if the given user owns the specified subscription
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsReport(userId, reportId) -> Boolean
+    // Checks if the given user owns the specified report
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION TrackerExistsForUser(userId) -> Boolean
+    // Checks if a spending tracker exists for the given user
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION UserOwnsEvent(userId, eventId) -> Boolean
+    // Checks if the given user owns the specified calendar event
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION IsEventEditable(eventId) -> Boolean
+    // Checks if the calendar event is marked as editable
+    RETURN TRUE/FALSE
+END FUNCTION
+
+FUNCTION ScheduleNotificationForReminder(date, message)
+    // Logic to schedule a push notification or in-app notification
+END FUNCTION
+
+FUNCTION RescheduleNotificationForReminder(reminderId, newDate, newMessage)
+    // Logic to update a scheduled notification
+END FUNCTION
+
+FUNCTION CancelScheduledNotification(reminderId)
+    // Logic to cancel a scheduled notification
+END FUNCTION
+
+FUNCTION ScheduleCalendarEvent(userId, date, type, entityId, editable)
+    // Logic to add an event to the user's calendar
+END FUNCTION
+
+FUNCTION UpdateCalendarEvent(entityId, newDate)
+    // Logic to update a calendar event linked to an entity
+END FUNCTION
+
+FUNCTION DeleteCalendarEvent(entityId)
+    // Logic to delete a calendar event linked to an entity
+END FUNCTION
+
+FUNCTION AnalyzeSpending(transactions) -> Map<Category, Amount>
+    // Logic to categorize and sum spending from transactions
+    RETURN {}
+END FUNCTION
+
+FUNCTION CalculateIncomeVsExpenses(transactions) -> Object
+    // Logic to calculate total income and expenses
+    RETURN {Income: 0, Expenses: 0}
+END FUNCTION
+
+FUNCTION GenerateInsights(spendingByCategory, incomeVsExpenses) -> String
+    // Logic to generate textual insights based on financial data
+    RETURN "Insights text..."
+END FUNCTION
+
+FUNCTION ConvertReportToFormat(reportData, format) -> File
+    // Logic to convert report data to PDF, CSV, etc.
+    RETURN FileObject
+END FUNCTION
+
